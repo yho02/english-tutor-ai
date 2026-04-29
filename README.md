@@ -47,15 +47,3 @@ GROQ_API_KEY=your_api_key_here
 ```
 streamlit run main.py
 ```
-
-## Authors
-
-* **Billie Thompson** - *Initial work* - [PurpleBooth](https://github.com/PurpleBooth)
-
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
-
-## Acknowledgments
-
