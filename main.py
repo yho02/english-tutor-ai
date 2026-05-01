@@ -1,261 +1,396 @@
 import streamlit as st
-from groq import Groq
-from dotenv import load_dotenv
-import os
-import json
+from tutor import (
+    ask_tutor,
+    ask_for_review,
+    is_review_due,
+    update_profile,
+    default_profile,
+    INITIAL_GREETING,
+)
+from db import (
+    get_or_create_student,
+    load_progress,
+    save_progress,
+    advance_step,
+    get_current_lesson,
+    save_message,
+    load_message_history,
+)
 
-load_dotenv()
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+# ─── Page Config ──────────────────────────────────────────────────────────────
 
-# ─── Page Config ────────────────────────────────────────────────────────────
-st.set_page_config(page_title="English Grammar Tutor", page_icon="📚", layout="centered")
-st.title("📚 English Grammar Tutor")
+st.set_page_config(
+    page_title="Ella — English Tutor",
+    page_icon="📚",
+    layout="centered",
+)
 
-# ─── Session State Init ──────────────────────────────────────────────────────
-defaults = {
-    "conversation_history": [],
-    "student_profile": {
-        "level": "unknown",           # beginner | intermediate | advanced
-        "grammar_score": 0.5,         # 0.0 (weak) → 1.0 (strong)
-        "vocabulary_score": 0.5,
-        "exchange_count": 0,
-        "learned_topics": [],         # list of {"topic": str, "mastered": bool}
-        "last_review_at": 0,          # exchange_count when last review was given
-    },
-    "show_profile": False,
+# ─── Custom CSS ───────────────────────────────────────────────────────────────
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Serif+Display&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'DM Sans', sans-serif;
 }
-for key, val in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
 
-# ─── System Prompt ────────────────────────────────────────────────────────────
-def get_system_prompt():
-    p = st.session_state.student_profile
+.main { background-color: #fafaf8; }
 
-    level_guidance = {
-        "unknown":      "You don't know the student's level yet. Start simple, observe, and infer.",
-        "beginner":     "Use very simple words and short sentences. Avoid jargon. Be very encouraging.",
-        "intermediate": "Use moderate vocabulary. Explain grammar terms briefly. Balance challenge with support.",
-        "advanced":     "Use precise linguistic terminology. Offer nuanced, detailed explanations. Challenge them.",
-    }
+.stApp {
+    background-color: #fafaf8;
+}
 
-    learned = ", ".join([t["topic"] for t in p["learned_topics"]]) or "none yet"
-    mastered = ", ".join([t["topic"] for t in p["learned_topics"] if t["mastered"]]) or "none yet"
+/* Header */
+.tutor-header {
+    text-align: center;
+    padding: 2rem 0 1rem 0;
+}
+.tutor-header h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 2.2rem;
+    color: #1a1a1a;
+    margin-bottom: 0.2rem;
+}
+.tutor-header p {
+    color: #888;
+    font-size: 0.95rem;
+    font-weight: 300;
+}
 
-    return f"""You are an adaptive English grammar tutor. Your job is to teach English in a personalised, encouraging way.
+/* Level badge */
+.level-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-left: 6px;
+}
+.level-unknown      { background: #f0f0ee; color: #888; }
+.level-beginner     { background: #e8f4e8; color: #2d7a2d; }
+.level-intermediate { background: #fff4e0; color: #b36200; }
+.level-advanced     { background: #e8eeff; color: #2a3eb1; }
 
-STUDENT PROFILE (update your behaviour based on this):
-- Detected level: {p['level']}
-- Grammar strength: {p['grammar_score']:.0%} ({'strong' if p['grammar_score'] > 0.65 else 'needs work'})
-- Vocabulary strength: {p['vocabulary_score']:.0%} ({'strong' if p['vocabulary_score'] > 0.65 else 'needs work'})
-- Topics introduced: {learned}
-- Topics mastered: {mastered}
+/* Chat bubbles */
+.chat-user {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0.5rem 0;
+}
+.chat-tutor {
+    display: flex;
+    justify-content: flex-start;
+    margin: 0.5rem 0;
+}
+.bubble-user {
+    background: #1a1a1a;
+    color: #fff;
+    padding: 0.75rem 1rem;
+    border-radius: 18px 18px 4px 18px;
+    max-width: 75%;
+    font-size: 0.95rem;
+    line-height: 1.55;
+}
+.bubble-tutor {
+    background: #fff;
+    color: #1a1a1a;
+    padding: 0.75rem 1rem;
+    border-radius: 18px 18px 18px 4px;
+    max-width: 75%;
+    font-size: 0.95rem;
+    line-height: 1.55;
+    border: 1px solid #ebebeb;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.bubble-review {
+    background: #f7f5ff;
+    border: 1px solid #ddd8ff;
+    color: #1a1a1a;
+    padding: 0.75rem 1rem;
+    border-radius: 18px 18px 18px 4px;
+    max-width: 80%;
+    font-size: 0.95rem;
+    line-height: 1.55;
+}
+.avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #e8eeff;
+    color: #2a3eb1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: 600;
+    flex-shrink: 0;
+    margin-right: 8px;
+    margin-top: 2px;
+}
 
-LEVEL GUIDANCE:
-{level_guidance.get(p['level'], level_guidance['unknown'])}
+/* Progress bar */
+.progress-bar-wrap {
+    background: #ebebeb;
+    border-radius: 8px;
+    height: 6px;
+    margin: 4px 0 12px 0;
+}
+.progress-bar-fill {
+    height: 6px;
+    border-radius: 8px;
+    background: linear-gradient(90deg, #4f46e5, #818cf8);
+    transition: width 0.4s ease;
+}
 
-YOUR TASKS (pick the most relevant one per turn):
-1. CORRECTION — If the student's sentence has errors, identify each error, explain it simply, and show the corrected version.
-2. PRAISE — If the sentence is correct, confirm it warmly and briefly explain WHY it is correct.
-3. CHALLENGE — When the student does well, introduce a slightly harder concept or vocabulary word related to their topic.
-4. REVIEW — Every 6 exchanges (you will be explicitly asked for a review), summarise what the student has learned, what they're strong at, and give them a short exercise to test a weakness.
+/* Stat cards */
+.stat-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 1rem;
+}
+.stat-card {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #ebebeb;
+    border-radius: 12px;
+    padding: 10px 14px;
+    text-align: center;
+}
+.stat-label {
+    font-size: 0.7rem;
+    color: #aaa;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.stat-value {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #1a1a1a;
+    margin-top: 2px;
+}
 
-ADAPTATION RULES:
-- If the student makes the SAME error twice, try a different explanation strategy.
-- If grammar is strong but vocabulary is weak, introduce new words proactively.
-- If vocabulary is strong but grammar is weak, focus corrections on grammar patterns.
-- After a topic is introduced 3+ times correctly, consider it mastered.
+/* Lesson chip */
+.lesson-chip {
+    background: #f0f4ff;
+    border: 1px solid #d8e0ff;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 0.8rem;
+    color: #4f46e5;
+    margin-bottom: 1rem;
+}
+.lesson-chip span {
+    font-weight: 600;
+}
 
-ALWAYS end each response with a short, gentle invitation for the student to try another sentence.
-"""
+/* Hide streamlit branding */
+#MainMenu, footer, header { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
 
-# ─── Profile Updater (called after each reply) ───────────────────────────────
-def update_profile_from_reply(user_sentence: str, tutor_reply: str):
-    """Ask the model to extract structured signals about student performance."""
-    probe = f"""
-You are an assessment engine. Given a student sentence and a tutor reply, return ONLY valid JSON (no markdown, no extra text) with these fields:
+# ─── Session State Init ───────────────────────────────────────────────────────
 
-{{
-  "level_signal": "beginner" | "intermediate" | "advanced" | "unknown",
-  "grammar_ok": true | false,
-  "vocabulary_ok": true | false,
-  "topic_introduced": "<short topic name or null>",
-  "topic_mastered": true | false
-}}
+if "student_id"  not in st.session_state: st.session_state.student_id  = None
+if "profile"     not in st.session_state: st.session_state.profile     = default_profile()
+if "history"     not in st.session_state: st.session_state.history     = []
+if "messages"    not in st.session_state: st.session_state.messages    = []
+if "progress"    not in st.session_state: st.session_state.progress    = None
+if "lesson"      not in st.session_state: st.session_state.lesson      = None
+if "name"        not in st.session_state: st.session_state.name        = ""
+if "started"     not in st.session_state: st.session_state.started     = False
 
-Student sentence: {user_sentence}
-Tutor reply: {tutor_reply}
-"""
-    try:
-        res = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": probe}],
-            max_tokens=200,
-            temperature=0.1,
-        )
-        raw = res.choices[0].message.content.strip()
-        # strip possible markdown fences
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        signals = json.loads(raw)
+# ─── Login Screen ─────────────────────────────────────────────────────────────
 
-        p = st.session_state.student_profile
-        p["exchange_count"] += 1
+if not st.session_state.started:
+    st.markdown("""
+    <div class="tutor-header">
+        <h1>Ella</h1>
+        <p>Your personal English tutor — adaptive, patient, and always encouraging.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-        # Update level (exponential moving average of signals)
-        level_map = {"beginner": 0.0, "intermediate": 0.5, "advanced": 1.0, "unknown": None}
-        lv = level_map.get(signals.get("level_signal", "unknown"))
-        if lv is not None:
-            # After 5+ exchanges, lock level more firmly
-            alpha = 0.2 if p["exchange_count"] > 5 else 0.4
-            current_lv = level_map.get(p["level"], 0.5) if p["level"] != "unknown" else lv
-            blended = (1 - alpha) * current_lv + alpha * lv
-            if blended < 0.25:
-                p["level"] = "beginner"
-            elif blended < 0.75:
-                p["level"] = "intermediate"
-            else:
-                p["level"] = "advanced"
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        name = st.text_input("What's your name?", placeholder="e.g. Maria", label_visibility="visible")
+        if st.button("Start Learning →", use_container_width=True) and name.strip():
+            with st.spinner("Setting up your session..."):
+                student_id = get_or_create_student(name.strip())
+                progress   = load_progress(student_id)
+                lesson     = get_current_lesson(progress["current_step"])
+                history    = load_message_history(student_id)
 
-        # Update scores
-        smooth = 0.25
-        if signals.get("grammar_ok") is True:
-            p["grammar_score"] = min(1.0, p["grammar_score"] + smooth * (1 - p["grammar_score"]))
-        elif signals.get("grammar_ok") is False:
-            p["grammar_score"] = max(0.0, p["grammar_score"] - smooth * p["grammar_score"])
+                st.session_state.student_id = student_id
+                st.session_state.name       = name.strip()
+                st.session_state.progress   = progress
+                st.session_state.lesson     = lesson
+                st.session_state.history    = history
+                st.session_state.started    = True
 
-        if signals.get("vocabulary_ok") is True:
-            p["vocabulary_score"] = min(1.0, p["vocabulary_score"] + smooth * (1 - p["vocabulary_score"]))
-        elif signals.get("vocabulary_ok") is False:
-            p["vocabulary_score"] = max(0.0, p["vocabulary_score"] - smooth * p["vocabulary_score"])
+                # add greeting as first message if no history
+                if not history:
+                    st.session_state.messages = [
+                        {"role": "assistant", "content": INITIAL_GREETING}
+                    ]
+                else:
+                    st.session_state.messages = history
 
-        # Track topics
-        topic = signals.get("topic_introduced")
-        if topic and topic != "null":
-            existing = next((t for t in p["learned_topics"] if t["topic"] == topic), None)
-            if existing:
-                if signals.get("topic_mastered"):
-                    existing["mastered"] = True
-            else:
-                p["learned_topics"].append({"topic": topic, "mastered": bool(signals.get("topic_mastered"))})
+            st.rerun()
+    st.stop()
 
-    except Exception:
-        # Silent fail — profile just won't update this turn
-        st.session_state.student_profile["exchange_count"] += 1
+# ─── Main App ─────────────────────────────────────────────────────────────────
 
+profile  = st.session_state.profile
+lesson   = st.session_state.lesson
+progress = st.session_state.progress
 
-# ─── Ask Tutor ───────────────────────────────────────────────────────────────
-def ask_tutor(sentence: str) -> str:
-    st.session_state.conversation_history.append({"role": "user", "content": sentence})
+# Header
+level = profile["level"]
+level_class = f"level-{level}"
+st.markdown(f"""
+<div class="tutor-header">
+    <h1>Ella <span class="level-badge {level_class}">{level}</span></h1>
+    <p>Your adaptive English tutor</p>
+</div>
+""", unsafe_allow_html=True)
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": get_system_prompt()},
-            *st.session_state.conversation_history,
-        ],
-    )
-    reply = response.choices[0].message.content
-    st.session_state.conversation_history.append({"role": "assistant", "content": reply})
-    return reply
-
-
-def ask_for_review() -> str:
-    """Trigger an explicit periodic review message."""
-    p = st.session_state.student_profile
-    learned = ", ".join([t["topic"] for t in p["learned_topics"]]) or "general English"
-    weak = []
-    if p["grammar_score"] < 0.5:
-        weak.append("grammar")
-    if p["vocabulary_score"] < 0.5:
-        weak.append("vocabulary")
-    weak_str = " and ".join(weak) if weak else "no specific weakness detected"
-
-    review_prompt = (
-        f"Please give the student a friendly progress review. "
-        f"Topics covered: {learned}. Areas needing more work: {weak_str}. "
-        f"End with one short exercise sentence for the student to correct or complete."
-    )
-    st.session_state.conversation_history.append({"role": "user", "content": "[SYSTEM REVIEW REQUEST]"})
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": get_system_prompt()},
-            *st.session_state.conversation_history[:-1],  # exclude fake user msg
-            {"role": "user", "content": review_prompt},
-        ],
-    )
-    reply = response.choices[0].message.content
-    # Replace the fake user message with assistant reply in history
-    st.session_state.conversation_history[-1] = {"role": "assistant", "content": f"📊 **Progress Review**\n\n{reply}"}
-    st.session_state.student_profile["last_review_at"] = st.session_state.student_profile["exchange_count"]
-    return f"📊 **Progress Review**\n\n{reply}"
-
-
-# ─── Sidebar: Student Profile ────────────────────────────────────────────────
+# Sidebar — student stats
 with st.sidebar:
-    st.header("🧠 Student Profile")
-    p = st.session_state.student_profile
+    st.markdown(f"### 👋 Hi, {st.session_state.name}!")
+    st.markdown("---")
 
-    level_emoji = {"beginner": "🌱", "intermediate": "🌿", "advanced": "🌳", "unknown": "❓"}
-    st.metric("Level", f"{level_emoji.get(p['level'], '❓')} {p['level'].capitalize()}")
+    # grammar score
+    g_score = int(profile["grammar_score"] * 100)
+    st.markdown(f"**Grammar** — {g_score}%")
+    st.markdown(f"""
+    <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" style="width:{g_score}%"></div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.write("**Skill Scores**")
-    st.progress(p["grammar_score"], text=f"Grammar: {p['grammar_score']:.0%}")
-    st.progress(p["vocabulary_score"], text=f"Vocabulary: {p['vocabulary_score']:.0%}")
+    # vocab score
+    v_score = int(profile["vocabulary_score"] * 100)
+    st.markdown(f"**Vocabulary** — {v_score}%")
+    st.markdown(f"""
+    <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" style="width:{v_score}%"></div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.write(f"**Exchanges:** {p['exchange_count']}")
+    st.markdown("---")
 
-    if p["learned_topics"]:
-        st.write("**Topics:**")
-        for t in p["learned_topics"]:
-            icon = "✅" if t["mastered"] else "📖"
-            st.write(f"{icon} {t['topic']}")
+    # stats
+    exchanges = profile["exchange_count"]
+    topics    = len(profile["learned_topics"])
+    mastered  = len([t for t in profile["learned_topics"] if t["mastered"]])
+    step      = progress["current_step"] if progress else 1
 
-    st.divider()
-    if st.button("🔄 Reset Session"):
-        for key in defaults:
-            st.session_state[key] = defaults[key] if not isinstance(defaults[key], dict) else defaults[key].copy()
+    st.markdown(f"""
+    <div class="stat-row">
+        <div class="stat-card">
+            <div class="stat-label">Exchanges</div>
+            <div class="stat-value">{exchanges}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Topics</div>
+            <div class="stat-value">{topics}</div>
+        </div>
+    </div>
+    <div class="stat-row">
+        <div class="stat-card">
+            <div class="stat-label">Mastered</div>
+            <div class="stat-value">{mastered}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Step</div>
+            <div class="stat-value">{step}/981</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # current lesson chip
+    if lesson:
+        st.markdown(f"""
+        <div class="lesson-chip">
+            📌 <span>Today's focus</span><br>
+            {lesson.get('cefr_level','')}: {lesson.get('guideword','').replace('FORM: ','').replace('USE: ','')}
+        </div>
+        """, unsafe_allow_html=True)
+
+    # learned topics
+    if profile["learned_topics"]:
+        st.markdown("**Topics covered:**")
+        for t in profile["learned_topics"]:
+            icon = "✅" if t["mastered"] else "🔄"
+            st.markdown(f"{icon} {t['topic']}")
+
+    st.markdown("---")
+    if st.button("End Session", use_container_width=True):
+        if progress:
+            new_sessions = progress["sessions_on_step"] + 1
+            if new_sessions >= 2:
+                advance_step(st.session_state.student_id, progress["current_step"])
+            else:
+                save_progress(st.session_state.student_id, progress["current_step"], new_sessions)
+        st.session_state.started = False
+        st.session_state.student_id = None
+        st.session_state.messages = []
+        st.session_state.history = []
+        st.session_state.profile = default_profile()
         st.rerun()
 
-# ─── Chat History ─────────────────────────────────────────────────────────────
-REVIEW_EVERY = 6  # exchanges between automatic reviews
+# ─── Chat Display ─────────────────────────────────────────────────────────────
 
-# Show initial greeting if conversation is empty
-if not st.session_state.conversation_history:
-    initial_greeting = "Hello! I'm your English grammar tutor. 👋\n\nTo get started, simply type any English sentence — it can be about any topic you'd like. I'll give you friendly feedback, correct any mistakes, and help you improve.\n\nGo ahead, try your first sentence!"
-    with st.chat_message("assistant"):
-        st.markdown(initial_greeting)
-    # Add greeting to history so it persists
-    st.session_state.conversation_history.append({"role": "assistant", "content": initial_greeting})
-
-# Skip the first message (initial greeting) since it's already displayed above
-for message in st.session_state.conversation_history[1:]:
-    if message["content"] == "[SYSTEM REVIEW REQUEST]":
-        continue
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+chat_container = st.container()
+with chat_container:
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            st.markdown(f"""
+            <div class="chat-user">
+                <div class="bubble-user">{msg['content']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            is_review = msg["content"].startswith("📊")
+            bubble_class = "bubble-review" if is_review else "bubble-tutor"
+            st.markdown(f"""
+            <div class="chat-tutor">
+                <div class="avatar">E</div>
+                <div class="{bubble_class}">{msg['content']}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
 # ─── Input ────────────────────────────────────────────────────────────────────
-if sentence := st.chat_input("Type a sentence for feedback…"):
-    with st.chat_message("user"):
-        st.write(sentence)
 
-    # Check if a review is due BEFORE this turn
-    p = st.session_state.student_profile
-    review_due = (
-        p["exchange_count"] > 0
-        and p["exchange_count"] % REVIEW_EVERY == 0
-        and p["exchange_count"] != p["last_review_at"]
-    )
+user_input = st.chat_input("Type a sentence in English...")
 
-    with st.chat_message("assistant"):
-        if review_due:
-            with st.spinner("Preparing your progress review…"):
-                review_reply = ask_for_review()
-            st.markdown(review_reply)
-            st.divider()
+if user_input and user_input.strip():
+    # add user message to display
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    save_message(st.session_state.student_id, "user", user_input)
 
-        with st.spinner("Thinking…"):
-            reply = ask_tutor(sentence)
-            update_profile_from_reply(sentence, reply)
-        st.markdown(reply)
+    # get AI response
+    with st.spinner("Ella is thinking..."):
+        if is_review_due(profile):
+            reply, new_history, new_profile = ask_for_review(
+                st.session_state.history, profile, lesson
+            )
+            st.session_state.profile = new_profile
+        else:
+            reply, new_history = ask_tutor(
+                user_input, st.session_state.history, profile, lesson
+            )
+
+        # update history and profile
+        st.session_state.history = new_history
+        st.session_state.profile = update_profile(profile, user_input, reply)
+
+    # save and display assistant reply
+    save_message(st.session_state.student_id, "assistant", reply)
+    st.session_state.messages.append({"role": "assistant", "content": reply})
+
+    st.rerun()
