@@ -1,121 +1,88 @@
-from supabase import create_client
-from dotenv import load_dotenv
+import json
 import os
+import csv
 
-load_dotenv()
+DB_FILE = "db.json"
 
-supabase = create_client(
-    os.getenv("SUPABASE_URL"),
-    os.getenv("SUPABASE_KEY")
-)
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _load_db() -> dict:
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    return {"students": {}} 
+
+
+def _save_db(db: dict):
+    with open(DB_FILE, "w") as f:
+        json.dump(db, f, indent=2)
 
 # ─── Student ──────────────────────────────────────────────────────────────────
 
-def get_or_create_student(name: str) -> int:
-    """
-    Returns student_id. Creates a new student if they don't exist yet.
-    """
-    # check if student exists
-    result = supabase.table("students")\
-        .select("id")\
-        .eq("name", name)\
-        .execute()
-
-    if result.data:
-        student_id = result.data[0]["id"]
+def get_or_create_student(name: str) -> str:
+    db = _load_db()
+    if name in db["students"]:
         print(f"Welcome back, {name}!")
     else:
-        # create new student
-        new_student = supabase.table("students")\
-            .insert({"name": name})\
-            .execute()
-        student_id = new_student.data[0]["id"]
-
-        # create their progress row starting at step 1
-        supabase.table("student_progress").insert({
-            "student_id": student_id,
-            "current_step": 1,
-            "sessions_on_step": 0
-        }).execute()
-
+        db["students"][name] = {
+            "progress": {"current_step": 1, "sessions_on_step": 0},
+            "messages": []
+        }
+        _save_db(db)
         print(f"Welcome, {name}! Starting from the beginning.")
-
-    return student_id
-
+    return name  
 
 # ─── Progress ─────────────────────────────────────────────────────────────────
 
-def load_progress(student_id: int) -> dict:
-    """
-    Returns the student's current progress from the DB.
-    """
-    result = supabase.table("student_progress")\
-        .select("current_step, sessions_on_step")\
-        .eq("student_id", student_id)\
-        .execute()
+def load_progress(student_id: str) -> dict:
+    db = _load_db()
+    return db["students"][student_id]["progress"]
 
-    return result.data[0] if result.data else {"current_step": 1, "sessions_on_step": 0}
-
-
-def save_progress(student_id: int, current_step: int, sessions_on_step: int):
-    """
-    Updates the student's progress in the DB.
-    """
-    supabase.table("student_progress").update({
+def save_progress(student_id: str, current_step: int, sessions_on_step: int):
+    db = _load_db()
+    db["students"][student_id]["progress"] = {
         "current_step": current_step,
         "sessions_on_step": sessions_on_step,
-    }).eq("student_id", student_id).execute()
+    }
+    _save_db(db)
 
-
-def advance_step(student_id: int, current_step: int):
-    """
-    Moves student to the next curriculum step.
-    """
-    supabase.table("student_progress").update({
+def advance_step(student_id: str, current_step: int):
+    db = _load_db()
+    db["students"][student_id]["progress"] = {
         "current_step": current_step + 1,
         "sessions_on_step": 0,
-    }).eq("student_id", student_id).execute()
+    }
+    _save_db(db)
     print(f"Advanced to step {current_step + 1}")
-
 
 # ─── Curriculum ───────────────────────────────────────────────────────────────
 
-def get_current_lesson(current_step: int) -> dict:
-    """
-    Returns the grammar lesson for the current step.
-    """
-    result = supabase.table("grammar_lessons")\
-        .select("*")\
-        .eq("step", current_step)\
-        .execute()
-
-    return result.data[0] if result.data else None
-
-
+def get_current_lesson(current_step: int) -> dict | None:
+    with open("grammar_profile_cleaned.csv", "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if int(row["step"]) == current_step:
+                return {
+                    "cefr_level":         row["cefr_level"],
+                    "guideword":          row["guideword"],
+                    "learning_objective": row["learning_objective"],
+                    "example_sentence":   row["example_sentence"],
+                    "grammar_category":   row["grammar_category"],
+                    "sub_category":       row["sub_category"],
+                    "lexical_range":      row["lexical_range"],
+                }
+    return None
 # ─── Messages ─────────────────────────────────────────────────────────────────
 
-def save_message(student_id: int, role: str, content: str):
-    """
-    Saves a single message to the messages table.
-    role is either 'user' or 'assistant'
-    """
-    supabase.table("messages").insert({
-        "student_id": student_id,
+def save_message(student_id: str, role: str, content: str):
+    db = _load_db()
+    db["students"][student_id]["messages"].append({
         "role": role,
         "content": content
-    }).execute()
+    })
+    _save_db(db)
 
-
-def load_message_history(student_id: int, limit: int = 20) -> list:
-    """
-    Loads the last N messages for a student.
-    Returns them in the format Groq expects.
-    """
-    result = supabase.table("messages")\
-        .select("role, content")\
-        .eq("student_id", student_id)\
-        .order("created_at", desc=False)\
-        .limit(limit)\
-        .execute()
-
-    return result.data if result.data else []
+def load_message_history(student_id: str, limit: int = 20) -> list:
+    db = _load_db()
+    messages = db["students"][student_id]["messages"]
+    return messages[-limit:]

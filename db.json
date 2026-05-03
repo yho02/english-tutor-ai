@@ -1,0 +1,35 @@
+{
+  "students": {
+    "y": {
+      "progress": {
+        "current_step": 1,
+        "sessions_on_step": 0
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello what are we learning today"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello. I'm excited to start learning with you. We can begin with something simple. Why don't we talk about the people around us, like friends or teachers? What are they like? Try to tell me something about them, and we'll go from there.\n\nPlease go ahead and say something about someone you know."
+        },
+        {
+          "role": "user",
+          "content": "asdasdasd"
+        },
+        {
+          "role": "assistant",
+          "content": "It looks like you might have typed something that isn't a sentence. That's okay, it can happen to anyone. Let's start fresh. Remember, we were talking about the people around us, like friends or teachers. Try to tell me something about them. For example, you could say something like \"My teacher is nice\" or \"My friend is happy\". Give it a try!\n\nWhat's something you can say about someone you know?"
+        }
+      ]
+    },
+    "Y": {
+      "progress": {
+        "current_step": 1,
+        "sessions_on_step": 0
+      },
+      "messages": []
+    }
+  }
+}

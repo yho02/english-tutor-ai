@@ -31,7 +31,7 @@ def default_state() -> dict:
 def get_system_prompt(profile: dict, lesson: dict = None) -> str:
     level_guidance = {
         "unknown":      "You don't know the student's level yet. Start simple, observe, and infer.",
-        "beginner":     "Use very simple words and short sentences. Avoid jargon. Be very encouraging.",
+        "beginner":     "Use very simple words and short sentences. Avoid jargon. Be encouraging yet direct.",
         "intermediate": "Use moderate vocabulary. Explain grammar terms briefly. Balance challenge with support.",
         "advanced":     "Use precise linguistic terminology. Offer nuanced, detailed explanations. Challenge them.",
     }
