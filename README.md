@@ -47,3 +47,9 @@ GROQ_API_KEY=your_api_key_here
 ```
 streamlit run main.py
 ```
+
+### Acknowledgement
+
+Grammar Guide: https://englishprofile.org/?menu=egp-online
+
+
